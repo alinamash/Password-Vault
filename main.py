@@ -1,13 +1,45 @@
 import json
 import os
-from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.fernet import Fernet, InvalidToken
+from base64 import b64encode, b64decode
+from getpass import getpass
 
-key = Fernet.generate_key()
+# user's master key
+password = getpass("Enter a master key: ").encode()
 
-with open("key.key", "wb") as key_file:
-    key_file.write(key)
+def load_salt():
+    with open("key.json", 'r') as f:
+        data = json.load(f)
+        if isinstance(data, dict) and 'salt' in data:
+            return b64decode(salt_dict['salt'])
+        elif isinstance(data, str):
+                return b64decode(data)
+        else:
+            raise ValueError("Invalid key.json format")
+
+if os.path.exists("key.json"):
+    salt = load_salt()
+else:
+    salt = os.urandom(16)
+    salt_b64 = b64encode(salt).decode('utf-8') # decode for json
+    salt_dict = {
+        'salt': salt_b64
+    }
+    with open("key.json", 'w') as f:
+        json.dump(salt_dict, f)
+
+
+kdf = PBKDF2HMAC(
+    algorithm=hashes.SHA256(),
+    length=32,
+    salt=salt,
+    iterations=100_000,
+)
+
+key = b64encode(kdf.derive(password))
 fernet = Fernet(key)
-
 
 def menu():
     print("=== PASSWORD VAULT ===")
@@ -37,7 +69,7 @@ def save_data(data):
 
 
 def add_credentials(service, username, password):
-    data = load_data()
+    data = load_data() # data is a dict that stores password info
     new_data = {
         'id': max([d["id"] for d in data], default=0) + 1,
         'service': service,
@@ -57,9 +89,13 @@ def show_credentials():
         return
 
     for d in data:
+        try:
+            decrypted_password = fernet.decrypt(d['password'].encode()).decode()
+        except InvalidToken:
+             decrypted_password = "[Decryption failed: wrong master key?]"
         print(f"#{d['id']} Service: {d['service']}")
         print(f"   Username: {d['username']}")
-        print(f"   Password: {fernet.decrypt(d['password']).decode()}")
+        print(f"   Password: {decrypted_password}")
     print('\n')
 
 
